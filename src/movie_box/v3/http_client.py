@@ -8,6 +8,7 @@ automatically.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from json import dumps
@@ -26,9 +27,16 @@ from movie_box.v3.helpers import (
     combine_url_path_with_params,
     process_api_response,
 )
-from movie_box.v3.urls import DEFAULT_API_BASE, HOST_POOL
+from movie_box.v3.urls import DEFAULT_API_BASE, HOST_POOL, MAIN_PAGE_PATH
 
 logger = logging.getLogger(__name__)
+
+BOOTSTRAP_PATH: str = f"{MAIN_PAGE_PATH}?page=1&tabId=0&version="
+"""
+The home-tab endpoint is the one call the API accepts without a bearer
+token; it issues a fresh one via the ``x-user`` response header, mirroring
+what the official app does before its first authenticated request.
+"""
 
 
 class MovieBoxHttpClient:
@@ -38,6 +46,8 @@ class MovieBoxHttpClient:
     * Automatic host-pool fallback on retryable error codes.
     * Request signing (``X-Client-Token``, ``x-tr-signature``).
     * Transparent bearer-token refresh from ``x-user`` response headers.
+    * Automatic guest-token bootstrap (see ``BOOTSTRAP_PATH``) before the
+      first authenticated request, if no token is already available.
     """
 
     def __init__(
@@ -54,6 +64,7 @@ class MovieBoxHttpClient:
         self._timeout = timeout
         self._follow_redirects = follow_redirects
         self._httpx_client_kwargs = httpx_client_kwargs
+        self._token_lock = asyncio.Lock()
 
     async def __aenter__(self) -> MovieBoxHttpClient:
         self._client = httpx.AsyncClient(
@@ -108,6 +119,20 @@ class MovieBoxHttpClient:
             user_agent=USER_AGENT,
         )
 
+    async def _ensure_token(self) -> None:
+        """
+        Fetch a guest bearer token from ``BOOTSTRAP_PATH`` if we don't already
+        have one, so that the caller's actual request doesn't get rejected
+        with a "miss token" error before it ever gets a chance to receive
+        one via ``x-user``.
+        """
+        if self._effective_token is not None:
+            return
+        async with self._token_lock:
+            if self._effective_token is not None:
+                return
+            await self._request("GET", BOOTSTRAP_PATH, _bootstrap=True)
+
     async def _request(
         self,
         method: str,
@@ -117,6 +142,7 @@ class MovieBoxHttpClient:
         content_type: str = "application/json",
         body: str | None = None,
         include_play_mode: bool = False,
+        _bootstrap: bool = False,
         **request_kwargs,
     ) -> tuple[str, httpx.Response]:
         """
@@ -128,6 +154,9 @@ class MovieBoxHttpClient:
         assert self._client is not None, (
             "Client not started – use 'async with' context."
         )
+
+        if not _bootstrap:
+            await self._ensure_token()
 
         last_response: httpx.Response | None = None
         last_exception: Exception = Exception
