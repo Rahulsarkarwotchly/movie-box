@@ -1,12 +1,10 @@
-import httpx
-import time
-import hashlib
-import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from moviebox_api import Moviebox
 
-app = FastAPI(title="Watchly Global Engine")
+app = FastAPI(title="Watchly Engine")
 
+# CORS (ताकि Netlify ब्लॉक न करे)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -15,41 +13,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 1. Use the specific API6 cluster which is more permissive for cloud IPs
-MOVIEBOX_BASE = "https://aoneroom.com"
-
-def get_headers():
-    timestamp = str(int(time.time()))
-    key = hashlib.md5(timestamp[::-1].encode()).hexdigest()
-    return {
-        "User-Agent": "MovieBoxPro/16.2.1 (Android 12; Pixel 6)",
-        "Accept": "application/json",
-        "X-Client-Token": f"{timestamp},{key}",
-        "Referer": "https://api6.aoneroom.com/"
-    }
-
-async def fetch_with_retry(url):
-    # Retry logic to handle DNS flickers on Render
-    async with httpx.AsyncClient(verify=False, follow_redirects=True) as client:
-        for attempt in range(3):
-            try:
-                resp = await client.get(url, headers=get_headers(), timeout=15.0)
-                resp.raise_for_status()
-                return resp.json()
-            except httpx.ConnectError:
-                # If connection fails, wait 1s and retry
-                await asyncio.sleep(1)
-            except Exception as e:
-                if attempt == 2:
-                    raise HTTPException(status_code=502, detail=f"Upstream Error: {str(e)}")
-    return {"status": "error", "message": "Failed to connect to MovieBox"}
+# लाइब्रेरी को इनिशियलाइज़ करें
+mb = Moviebox()
 
 @app.get("/api/v1/moviebox/search")
-async def search_proxy(query: str):
-    url = f"{MOVIEBOX_BASE}/search-api/search?keyword={query}"
-    return await fetch_with_retry(url)
+def search_content(query: str):
+    try:
+        # यह लाइब्रेरी ऑटोमैटिकली बेस्ट सर्वर से सर्च करेगी
+        results = mb.search(query)
+        return {"status": "success", "data": results}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get("/api/v1/moviebox/trending")
+def get_trending():
+    try:
+        # होमपेज / ट्रेंडिंग कंटेंट
+        trending = mb.home() 
+        return {"status": "success", "data": trending}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 @app.get("/api/v1/moviebox/stream")
-async def stream_proxy(id: str):
-    url = f"{MOVIEBOX_BASE}/subject-api/get?subjectId={id}"
-    return await fetch_with_retry(url)
+def get_stream(id: str):
+    try:
+        # यह सीधे रॉ लिंक्स (720p/1080p) निकालेगा
+        # नोट: लाइब्रेरी में ID पास करते समय ध्यान रखें
+        links = mb.get_movie(id) 
+        return {"status": "success", "data": links}
+    except Exception as e:
+        return {"status": "error", "message": "Link Extraction Failed"}
