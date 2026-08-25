@@ -1,5 +1,3 @@
 fastapi
 uvicorn
-httpx
-movie-box-dl
-pydantic
+moviebox-api
