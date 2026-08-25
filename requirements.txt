@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+httpx
+movie-box-dl
+pydantic
